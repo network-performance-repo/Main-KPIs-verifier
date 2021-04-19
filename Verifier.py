@@ -4,8 +4,26 @@ import numpy as np
 import glob
 import datetime
 
+#2G first
+kpi_dict = { '2g_kpis': {
+                        'thrput': 'EGPRS_LLC_THROUGHPUT_IR_Kbps_2G'
+                        ,'payload' : 'PAYLOAD_LLC_TOTAL_KBYTE_IR_KB_2G'
+                        ,'avail': 'TCH_AVAILABILITY_IR_2G'
+                },
+             '3g_kpis': {
+                        'thrput': 'Throughput_HS_DC_NodeB_kbps_IR_3G'
+                        ,'payload': 'PAYLOAD_TOTAL_3G_KBYTE_IR_KB_3G'
+                        ,'avail': 'Cell_Avail_Sys_IR_3G'
+                },
+             '4g_kpis': {
+                        'thrput': 'Throughput_UE_DL_kbps_IR_Kbps_4G'
+                        ,'payload': 'PAYLOAD_TOTAL_KBYTE_IR_KB_4G'
+                        ,'avail': 'CELL_AVAIL_SYS_IR_4G'
+                }
+        }
+
 def readFiles():
-    path = r'E:\data\data_verification\20200201'
+    path = r'D:\workspace_python\main_kpi_verifier\data\20210122'
     print('Reading input files in the path ' + path + ' ...')
     all_files = glob.glob(path + "/*.csv")
 
@@ -22,6 +40,25 @@ def readFiles():
     df_big = pd.concat(dfListRawFiles, axis=0, ignore_index=True)
     print('Concatenated successfully...')
 
+    df_big.rename(columns={"2G_EGPRS_LLC_THROUGHPUT_IR(Kbps)": "EGPRS_LLC_THROUGHPUT_IR_Kbps_2G",
+                       "2G_PAYLOAD_LLC_TOTAL_KBYTE_IR(KB)": "PAYLOAD_LLC_TOTAL_KBYTE_IR_KB_2G",
+                       "2G_TCH_AVAILABILITY_IR(%)": "TCH_AVAILABILITY_IR_2G",
+                       "3G_Throughput_HS_DC_NodeB_kbps_IR(%)": "Throughput_HS_DC_NodeB_kbps_IR_3G",
+                       "3G_PAYLOAD_TOTAL_3G_KBYTE_IR(KB)": "PAYLOAD_TOTAL_3G_KBYTE_IR_KB_3G",
+                       "3G Cell_Avail_Sys_IR(%)": "Cell_Avail_Sys_IR_3G",
+                       "4G_Throughput_UE_DL_kbps_IR(Kbps)": "Throughput_UE_DL_kbps_IR_Kbps_4G",
+                       "4G_PAYLOAD_TOTAL_KBYTE_IR(KB)": "PAYLOAD_TOTAL_KBYTE_IR_KB_4G",
+                       "4G_CELL_AVAIL_SYS_IR":"CELL_AVAIL_SYS_IR_4G"}, inplace=True)
+
+    #filtering out invalid values which are a few but they cause type errors in KPI examination code.
+    # for i in range(2, 5):
+    #     print('Cleaning up ' + str(i) + 'G Data...')
+    #     tech_label = str(i) + 'g_kpis'
+    #     tech_kpi_dict = kpi_dict[tech_label]
+    #     throughput_kpi = tech_kpi_dict['thrput']
+    df_big.query('~Throughput_UE_DL_kbps_IR_Kbps_4G.str.contains("-,", na=False)', engine='python', inplace=True)
+    #df_big.to_csv(r'D:\workspace_python\main_kpi_verifier\data\20210122\cleaned.csv', index=False, header=True)
+
     return df_big
 
 # verification functions ###############################################################
@@ -37,7 +74,7 @@ def check_thrput(df:pd.DataFrame, kpi_dict):
     avail_kpi = kpi_dict['avail']
 
     df_check_thrput = df[((df[throughput_kpi].isna())
-                             | (df[throughput_kpi] <= 0))
+                             | (pd.to_numeric(df[throughput_kpi], errors='coerce') <= 0) )
                             &
                             ((df[payload_kpi] > 0)
                              #commented as avail doesn't correlate directly to payload or throughput
@@ -53,14 +90,11 @@ def check_payload(df:pd.DataFrame, kpi_dict):
     payload_kpi = kpi_dict['payload']
     avail_kpi = kpi_dict['avail']
 
-    throughputMBps = round(df[throughput_kpi]/8/1024,2)
+    #throughputMBps = round(df[throughput_kpi]/8/1024,2)
     df_check_payload = df[((df[payload_kpi].isna())
                               | (df[payload_kpi] <= 0))
                              &
-                             ((throughputMBps > 0)
-                             #commented as avail doesn't correlate directly to payload or throughput
-                             # | (pd.to_numeric(df[avail_kpi], errors='coerce') > 0)
-                              )
+                              (round(pd.to_numeric(df[throughput_kpi], errors='coerce')/8/1024,2) > 0)
                              ]
     df_check_payload = df_check_payload.reset_index(drop=True)
     return df_check_payload
@@ -73,7 +107,7 @@ def check_avail(df:pd.DataFrame, kpi_dict):
     df_check_avail = df[((df[avail_kpi].isna())
                               | (pd.to_numeric(df[avail_kpi], errors='coerce') <= 0))
                              &
-                             ((df[throughput_kpi] > 0)
+                             ((round(pd.to_numeric(df[throughput_kpi], errors='coerce')/8/1024,2) > 0)
                              | (df[payload_kpi] > 0))
                              ]
 
@@ -89,7 +123,7 @@ def check_all_KPIs(df:pd.DataFrame, kpi_dict):
                               | (pd.to_numeric(df[avail_kpi], errors='coerce') <= 0))
                              &
                               ((df[throughput_kpi].isna())
-                               | (df[throughput_kpi] <= 0))
+                               | (round(pd.to_numeric(df[throughput_kpi], errors='coerce')/8/1024,2) <= 0))
                              &
                               ((df[payload_kpi].isna())
                               | (df[payload_kpi] <= 0))
@@ -121,10 +155,10 @@ def excludeNotSOACsites( df_raw_input: pd.DataFrame
         if i == 2: #2G
             df_merged = df_merged[df_merged['2G SOAC Date'].notnull()]
         elif i == 3: #3G
-            df_merged = df_merged[(df_merged['3G 2100 SOAC Date'].notnull()) | (df_merged['3G 900 SOAC Date'].notnull())]
+            df_merged = df_merged[(df_merged['U2100 SOAC Date'].notnull()) | (df_merged['U900 SOAC Date'].notnull())]
         elif i == 4: #4G
-            df_merged = df_merged[(df_merged['LTE 1800 SOAC Date'].notnull()) | (df_merged['LTE 2600 SOAC Date'].notnull())
-                                  | (df_merged['LTE 900 SOAC Date'].notnull())]
+            df_merged = df_merged[(df_merged['L1800 SOAC Date'].notnull()) | (df_merged['L2600 SOAC Date'].notnull())
+                                  | (df_merged['L900 SOAC Date'].notnull())]
         return df_merged
     else:
         return df_raw_input #just return it without any modification
@@ -191,24 +225,26 @@ def excludeUnsyncSites( df_raw_input: pd.DataFrame
 
 def readMorningReport():
     print("Reading morning report...")
-    df_morning = pd.read_excel(r'E:\data\data_verification\20200201\Irancell RAN Morning Report 31-Jan-2020.xlsx'
-                           , sheet_name='On-Air Sites', skiprows=1)
+    df_morning = pd.read_excel(r'D:\workspace_python\main_kpi_verifier\data\20210122\RAN Morning Report 2021-01-23.xlsx'
+                           , sheet_name='On-Air Sites') #, skiprows=1
 
-    df_morning = df_morning[['SiteID', '2G SOAC Date', '3G 2100 SOAC Date', '3G 900 SOAC Date', 'LTE 1800 SOAC Date'
-        ,'LTE 2600 SOAC Date', 'LTE 900 SOAC Date']]
+    df_morning = df_morning[['Site ID', '2G SOAC Date', 'U2100 SOAC Date', 'U900 SOAC Date', 'L1800 SOAC Date'
+        ,'L2600 SOAC Date', 'L900 SOAC Date']]
+
+    df_morning.rename(columns={'Site ID': 'SiteID'}, inplace=True)
 
     return df_morning
 
 def readDeactivatedSitesReport():
     print("Reading Deactivated list report...")
-    df_deactivatedSites = pd.read_excel(r'E:\data\data_verification\20200201\MAPS_active_deactive_lilst.xls'
+    df_deactivatedSites = pd.read_excel(r'D:\workspace_python\main_kpi_verifier\data\20210122\MAPS_active_deactive_lilst.xls'
                            , sheet_name='title_1')
 
     return df_deactivatedSites
 
 def readUnsyncList():
     print("Reading Unsync list ...")
-    df_UnsyncList = pd.read_excel(r'E:\data\data_verification\20200201\Ericsson_unsync_2020_02_01_0828.xlsx'
+    df_UnsyncList = pd.read_excel(r'D:\workspace_python\main_kpi_verifier\data\20210122\unsync_comp_20210122.xlsx'
                            , sheet_name='unsync_list')
 
     df_UnsyncList = df_UnsyncList.drop(['DAILY_SUMMATION'],axis=1)
@@ -286,29 +322,12 @@ def include2GThroughputCountres(df_check_thrput, df_2g_thrput):
     return df_merged
 
 
-#2G first
-kpi_dict = { '2g_kpis': {
-                        'thrput': '2G_EGPRS_LLC_THROUGHPUT_IR(Kbps)'
-                        ,'payload' : '2G_PAYLOAD_LLC_TOTAL_KBYTE_IR(KB)'
-                        ,'avail': '2G_TCH_AVAILABILITY_IR(%)'
-                },
-             '3g_kpis': {
-                        'thrput': '3G_Throughput_HS_DC_NodeB_kbps_IR(%)'
-                        ,'payload': '3G_PAYLOAD_TOTAL_3G_KBYTE_IR(KB)'
-                        ,'avail': '3G Cell_Avail_Sys_IR(%)'
-                },
-             '4g_kpis': {
-                        'thrput': '4G_Throughput_UE_DL_kbps_IR(Kbps)'
-                        ,'payload': '4G_PAYLOAD_TOTAL_KBYTE_IR(KB)' #'4G_PAYLOAD_TOTAL_MBYTE_IR(MB)'
-                        ,'avail': '4G_CELL_AVAIL_SYS_IR'
-                }
-        }
-
 #start here
 
 print('Started at: ', datetime.datetime.now())
 
-writer = pd.ExcelWriter(r'E:\data\data_verification\20200201\verification_report_20200201.xlsx')
+writer = pd.ExcelWriter(r'D:\workspace_python\main_kpi_verifier\data\20210122\verification_report_20210122.xlsx')
+
 
 # df_4g_thrput = read4GThrputCounters()
 # df_2g_thrput = read2GThrputCounters()
